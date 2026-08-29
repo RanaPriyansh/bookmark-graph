@@ -1,6 +1,7 @@
 """Command-line interface for bookmark-graph."""
 
 import click
+import os
 from pathlib import Path
 from rich.console import Console
 from rich.table import Table
@@ -14,6 +15,30 @@ from .export import Exporter
 
 
 console = Console()
+
+
+def validate_db_path(db_path: str) -> Path:
+    """Validate database path to prevent path traversal attacks.
+    
+    Args:
+        db_path: Database file path
+        
+    Returns:
+        Validated Path object
+        
+    Raises:
+        click.BadParameter: If path is invalid or unsafe
+    """
+    # Ensure the path doesn't contain suspicious patterns
+    if '..' in db_path or db_path.startswith('/etc') or db_path.startswith('/sys'):
+        raise click.BadParameter(
+            f"Invalid database path: {db_path}. "
+            "Path must not traverse directories or target system paths."
+        )
+    
+    path = Path(db_path).resolve()
+    
+    return path
 
 
 @click.group()
@@ -32,18 +57,23 @@ def main():
 def ingest(input_file, db):
     """Ingest bookmark export file (JSONL or Markdown)."""
     try:
+        db_path = validate_db_path(db)
+        
         console.print(f"[bold blue]Parsing {input_file}...[/bold blue]")
         posts = parse_file(Path(input_file))
         console.print(f"[green]✓[/green] Parsed {len(posts)} posts")
         
         console.print(f"[bold blue]Storing in {db}...[/bold blue]")
-        storage = Storage(Path(db))
+        storage = Storage(db_path)
         storage.insert_posts(posts)
         storage.close()
         
         console.print(f"[green]✓[/green] Successfully ingested {len(posts)} posts")
         
     except ParserError as e:
+        console.print(f"[bold red]Error:[/bold red] {e}")
+        raise click.Abort()
+    except click.BadParameter as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
         raise click.Abort()
     except Exception as e:
@@ -55,14 +85,14 @@ def ingest(input_file, db):
 @click.option('--db', default='bookmarks.db', help='Database file path')
 def stats(db):
     """Show graph statistics."""
-    db_path = Path(db)
-    
-    if not db_path.exists():
-        console.print(f"[bold red]Error:[/bold red] Database not found: {db}")
-        console.print("Run 'bookmark-graph ingest' first.")
-        raise click.Abort()
-    
     try:
+        db_path = validate_db_path(db)
+        
+        if not db_path.exists():
+            console.print(f"[bold red]Error:[/bold red] Database not found: {db}")
+            console.print("Run 'bookmark-graph ingest' first.")
+            raise click.Abort()
+        
         storage = Storage(db_path)
         graph = Graph(storage)
         stats = storage.get_stats()
@@ -95,6 +125,9 @@ def stats(db):
         
         storage.close()
         
+    except click.BadParameter as e:
+        console.print(f"[bold red]Error:[/bold red] {e}")
+        raise click.Abort()
     except Exception as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
         raise click.Abort()
@@ -106,14 +139,14 @@ def stats(db):
 @click.option('--limit', default=10, help='Maximum results to show')
 def query(search_query, db, limit):
     """Search posts by text content."""
-    db_path = Path(db)
-    
-    if not db_path.exists():
-        console.print(f"[bold red]Error:[/bold red] Database not found: {db}")
-        console.print("Run 'bookmark-graph ingest' first.")
-        raise click.Abort()
-    
     try:
+        db_path = validate_db_path(db)
+        
+        if not db_path.exists():
+            console.print(f"[bold red]Error:[/bold red] Database not found: {db}")
+            console.print("Run 'bookmark-graph ingest' first.")
+            raise click.Abort()
+        
         storage = Storage(db_path)
         posts = storage.search_posts(search_query)
         
@@ -134,6 +167,9 @@ def query(search_query, db, limit):
         
         storage.close()
         
+    except click.BadParameter as e:
+        console.print(f"[bold red]Error:[/bold red] {e}")
+        raise click.Abort()
     except Exception as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
         raise click.Abort()
@@ -144,14 +180,14 @@ def query(search_query, db, limit):
 @click.option('--db', default='bookmarks.db', help='Database file path')
 def neighbors(post_id, db):
     """Show neighboring posts (replies, mentions, same author)."""
-    db_path = Path(db)
-    
-    if not db_path.exists():
-        console.print(f"[bold red]Error:[/bold red] Database not found: {db}")
-        console.print("Run 'bookmark-graph ingest' first.")
-        raise click.Abort()
-    
     try:
+        db_path = validate_db_path(db)
+        
+        if not db_path.exists():
+            console.print(f"[bold red]Error:[/bold red] Database not found: {db}")
+            console.print("Run 'bookmark-graph ingest' first.")
+            raise click.Abort()
+        
         storage = Storage(db_path)
         post = storage.get_post(post_id)
         
@@ -189,6 +225,9 @@ def neighbors(post_id, db):
         
         storage.close()
         
+    except click.BadParameter as e:
+        console.print(f"[bold red]Error:[/bold red] {e}")
+        raise click.Abort()
     except Exception as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
         raise click.Abort()
@@ -202,14 +241,14 @@ def neighbors(post_id, db):
 @click.option('--max-nodes', default=50, help='Maximum nodes for diagram exports')
 def export(output_file, db, format, max_nodes):
     """Export graph data (JSON, Mermaid, or Graphviz)."""
-    db_path = Path(db)
-    
-    if not db_path.exists():
-        console.print(f"[bold red]Error:[/bold red] Database not found: {db}")
-        console.print("Run 'bookmark-graph ingest' first.")
-        raise click.Abort()
-    
     try:
+        db_path = validate_db_path(db)
+        
+        if not db_path.exists():
+            console.print(f"[bold red]Error:[/bold red] Database not found: {db}")
+            console.print("Run 'bookmark-graph ingest' first.")
+            raise click.Abort()
+        
         storage = Storage(db_path)
         exporter = Exporter(storage)
         output_path = Path(output_file)
@@ -227,6 +266,9 @@ def export(output_file, db, format, max_nodes):
         
         storage.close()
         
+    except click.BadParameter as e:
+        console.print(f"[bold red]Error:[/bold red] {e}")
+        raise click.Abort()
     except Exception as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
         raise click.Abort()

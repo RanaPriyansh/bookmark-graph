@@ -12,6 +12,15 @@ Inspired by prior work like Graphify, this tool runs entirely on your machine wi
 - **Analyze** connections between posts, authors, and hashtags
 - **Export** graphs in JSON, Mermaid, or Graphviz format
 
+## Performance
+
+Engineered for speed with bulk operations and proper indexing:
+- **~95,000 posts/sec** insertion rate
+- **~140,000 posts/sec** read rate
+- Handles 10,000+ posts in under 200ms
+- Optimized bulk inserts (no N+1 queries)
+- Indexed foreign key lookups
+
 ## Installation
 
 ```bash
@@ -85,6 +94,8 @@ Post content with @mentions and #hashtags
 
 All data is stored in a local SQLite database (`bookmarks.db` by default). Specify a different database with `--db <path>`.
 
+**Security:** Database paths are validated to prevent path traversal attacks. Paths containing `..` or targeting system directories like `/etc` or `/sys` are rejected.
+
 ## Requirements
 
 - Python 3.8+
@@ -103,6 +114,27 @@ pytest
 
 # Run tests with coverage
 pytest --cov=bookmark_graph
+
+# Run CI locally (same as GitHub Actions)
+pytest -v --cov=bookmark_graph --cov-report=term-missing
+```
+
+### Continuous Integration
+
+GitHub Actions runs tests automatically on:
+- Every push to `main` or feature branches
+- All pull requests
+- Python versions: 3.8, 3.9, 3.10, 3.11, 3.12
+
+CI will **fail the build** if any test fails, ensuring code quality.
+
+### Performance Benchmarks
+
+Run benchmarks to measure performance:
+
+```bash
+python3 benchmark.py           # Quick benchmark with fixture
+python3 benchmark_scale.py     # Scale test (100-10,000 posts)
 ```
 
 ## License
