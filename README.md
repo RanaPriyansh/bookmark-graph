@@ -6,11 +6,15 @@ Inspired by prior work like Graphify, this tool runs entirely on your machine wi
 
 ## What It Does
 
-- **Ingest** X bookmark exports (JSONL or Markdown format)
-- **Store** posts and relationships in a local SQLite database
-- **Query** bookmarks by text content
-- **Analyze** connections between posts, authors, and hashtags
-- **Export** graphs in JSON, Mermaid, or Graphviz format
+- Ingest X bookmark exports (JSONL or Markdown format)
+- Store posts and relationships in a local SQLite database
+- Query bookmarks by text content
+- Analyze connections between posts, authors, and hashtags
+- Export graphs in JSON, Mermaid, or Graphviz format
+
+## Performance
+
+Uses bulk operations and indexes to avoid N+1 queries. On 1000 synthetic posts: ~100k posts/sec insert, ~180k posts/sec read.
 
 ## Installation
 
@@ -85,6 +89,8 @@ Post content with @mentions and #hashtags
 
 All data is stored in a local SQLite database (`bookmarks.db` by default). Specify a different database with `--db <path>`.
 
+Database paths are validated to prevent path traversal attacks. Paths containing `..` or targeting system directories like `/etc` or `/sys` are rejected.
+
 ## Requirements
 
 - Python 3.8+
@@ -103,6 +109,20 @@ pytest
 
 # Run tests with coverage
 pytest --cov=bookmark_graph
+
+# Run CI locally (same as GitHub Actions)
+pytest -v --cov=bookmark_graph --cov-report=term-missing
+```
+
+### Continuous Integration
+
+GitHub Actions runs tests on every push and PR (Python 3.8-3.12). Build fails if tests fail.
+
+### Performance Benchmarks
+
+```bash
+python3 benchmark.py           # Fixture + 1000 synthetic posts
+python3 benchmark_scale.py     # Scale test (100-10,000 posts)
 ```
 
 ## License

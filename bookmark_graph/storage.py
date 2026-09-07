@@ -75,6 +75,29 @@ class Storage:
             self.conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_reply_to ON posts(reply_to)
             """)
+            
+            # Index for mention lookups in get_neighbors
+            self.conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_mentions_username ON mentions(username)
+            """)
+            
+            # Index for hashtag lookups
+            self.conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_hashtags_tag ON hashtags(tag)
+            """)
+            
+            # Index for bulk fetches by post_id
+            self.conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_mentions_post_id ON mentions(post_id)
+            """)
+            
+            self.conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_hashtags_post_id ON hashtags(post_id)
+            """)
+            
+            self.conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_urls_post_id ON urls(post_id)
+            """)
     
     def insert_posts(self, posts: List[Post]):
         """Insert posts into database.
@@ -82,41 +105,70 @@ class Storage:
         Args:
             posts: List of Post objects to insert
         """
+        if not posts:
+            return
+        
+        # Batch all operations in a single transaction
         with self.conn:
+            # Collect all data for bulk operations
+            post_rows = []
+            mention_rows = []
+            hashtag_rows = []
+            url_rows = []
+            post_ids = []
+            
             for post in posts:
-                # Insert post
-                self.conn.execute("""
-                    INSERT OR REPLACE INTO posts
-                    (id, text, author, created_at, url, reply_to)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                """, (post.id, post.text, post.author, post.created_at,
-                      post.url, post.reply_to))
+                post_ids.append((post.id,))
+                post_rows.append((
+                    post.id, post.text, post.author, 
+                    post.created_at, post.url, post.reply_to
+                ))
                 
-                # Delete old relationships
-                self.conn.execute("DELETE FROM mentions WHERE post_id = ?", (post.id,))
-                self.conn.execute("DELETE FROM hashtags WHERE post_id = ?", (post.id,))
-                self.conn.execute("DELETE FROM urls WHERE post_id = ?", (post.id,))
-                
-                # Insert mentions
                 for mention in post.mentions:
-                    self.conn.execute("""
-                        INSERT INTO mentions (post_id, username)
-                        VALUES (?, ?)
-                    """, (post.id, mention))
+                    mention_rows.append((post.id, mention))
                 
-                # Insert hashtags
                 for hashtag in post.hashtags:
-                    self.conn.execute("""
-                        INSERT INTO hashtags (post_id, tag)
-                        VALUES (?, ?)
-                    """, (post.id, hashtag))
+                    hashtag_rows.append((post.id, hashtag))
                 
-                # Insert URLs
                 for url in post.urls:
-                    self.conn.execute("""
-                        INSERT INTO urls (post_id, url)
-                        VALUES (?, ?)
-                    """, (post.id, url))
+                    url_rows.append((post.id, url))
+            
+            # Delete old relationships in bulk
+            self.conn.executemany(
+                "DELETE FROM mentions WHERE post_id = ?", post_ids
+            )
+            self.conn.executemany(
+                "DELETE FROM hashtags WHERE post_id = ?", post_ids
+            )
+            self.conn.executemany(
+                "DELETE FROM urls WHERE post_id = ?", post_ids
+            )
+            
+            # Insert posts in bulk
+            self.conn.executemany("""
+                INSERT OR REPLACE INTO posts
+                (id, text, author, created_at, url, reply_to)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, post_rows)
+            
+            # Insert relationships in bulk
+            if mention_rows:
+                self.conn.executemany(
+                    "INSERT INTO mentions (post_id, username) VALUES (?, ?)",
+                    mention_rows
+                )
+            
+            if hashtag_rows:
+                self.conn.executemany(
+                    "INSERT INTO hashtags (post_id, tag) VALUES (?, ?)",
+                    hashtag_rows
+                )
+            
+            if url_rows:
+                self.conn.executemany(
+                    "INSERT INTO urls (post_id, url) VALUES (?, ?)",
+                    url_rows
+                )
     
     def get_post(self, post_id: str) -> Optional[Post]:
         """Get a single post by ID.
@@ -151,7 +203,11 @@ class Storage:
             ORDER BY created_at
         """)
         
-        return [self._row_to_post(row) for row in cursor.fetchall()]
+        rows = cursor.fetchall()
+        if not rows:
+            return []
+        
+        return self._bulk_rows_to_posts(rows)
     
     def search_posts(self, query: str) -> List[Post]:
         """Search posts by text content.
@@ -169,7 +225,11 @@ class Storage:
             ORDER BY created_at
         """, (f'%{query}%',))
         
-        return [self._row_to_post(row) for row in cursor.fetchall()]
+        rows = cursor.fetchall()
+        if not rows:
+            return []
+        
+        return self._bulk_rows_to_posts(rows)
     
     def get_neighbors(self, post_id: str) -> dict:
         """Get neighboring posts (replies, mentions, same author).
@@ -248,6 +308,74 @@ class Storage:
             total_urls=total_urls,
             total_replies=total_replies,
         )
+    
+    def _bulk_rows_to_posts(self, rows) -> List[Post]:
+        """Convert multiple database rows to Post objects efficiently.
+        
+        Fetches all relationships in bulk (3 queries) instead of per-post (3N queries).
+        """
+        if not rows:
+            return []
+        
+        post_ids = [row['id'] for row in rows]
+        
+        # Fetch all mentions in one query
+        placeholders = ','.join('?' * len(post_ids))
+        cursor = self.conn.execute(f"""
+            SELECT post_id, username 
+            FROM mentions 
+            WHERE post_id IN ({placeholders})
+        """, post_ids)
+        mentions_map = {}
+        for row in cursor.fetchall():
+            post_id = row[0]
+            if post_id not in mentions_map:
+                mentions_map[post_id] = []
+            mentions_map[post_id].append(row[1])
+        
+        # Fetch all hashtags in one query
+        cursor = self.conn.execute(f"""
+            SELECT post_id, tag 
+            FROM hashtags 
+            WHERE post_id IN ({placeholders})
+        """, post_ids)
+        hashtags_map = {}
+        for row in cursor.fetchall():
+            post_id = row[0]
+            if post_id not in hashtags_map:
+                hashtags_map[post_id] = []
+            hashtags_map[post_id].append(row[1])
+        
+        # Fetch all URLs in one query
+        cursor = self.conn.execute(f"""
+            SELECT post_id, url 
+            FROM urls 
+            WHERE post_id IN ({placeholders})
+        """, post_ids)
+        urls_map = {}
+        for row in cursor.fetchall():
+            post_id = row[0]
+            if post_id not in urls_map:
+                urls_map[post_id] = []
+            urls_map[post_id].append(row[1])
+        
+        # Build Post objects
+        posts = []
+        for row in rows:
+            post_id = row['id']
+            posts.append(Post(
+                id=post_id,
+                text=row['text'],
+                author=row['author'],
+                created_at=row['created_at'],
+                url=row['url'],
+                mentions=mentions_map.get(post_id, []),
+                hashtags=hashtags_map.get(post_id, []),
+                urls=urls_map.get(post_id, []),
+                reply_to=row['reply_to'],
+            ))
+        
+        return posts
     
     def _row_to_post(self, row) -> Post:
         """Convert database row to Post object."""
